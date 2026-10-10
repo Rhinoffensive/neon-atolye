@@ -14,7 +14,9 @@ export function defaultProfile(over: Partial<StripProfile> = {}): StripProfile {
     color: '#ff2a3a',
     jacketColor: '#f5e1e3',
     cutUnit: 25,
+    ledsPerUnit: 3,
     ledPitch: 25 / 3,
+    blindCutAnywhere: true,
     width: 6,
     height: 12,
     rMinWarn: 30,
@@ -31,11 +33,32 @@ export function defaultProfile(over: Partial<StripProfile> = {}): StripProfile {
   };
 }
 
+export const ledPitchOf = (p: Pick<StripProfile, 'cutUnit' | 'ledsPerUnit'>): number =>
+  p.cutUnit / Math.max(1, p.ledsPerUnit);
+
+/** Bring documents saved by older versions up to date (fills new fields). */
+export function normalizeDoc(d: Doc): Doc {
+  const base = defaultProfile();
+  return {
+    ...d,
+    settings: { ...defaultSettings(), ...d.settings },
+    profiles: d.profiles.map((p) => {
+      const q = { ...base, ...p };
+      if (!(p as Partial<StripProfile>).ledsPerUnit)
+        q.ledsPerUnit = Math.max(1, Math.round(q.cutUnit / (p.ledPitch || q.cutUnit / 3)));
+      if ((p as Partial<StripProfile>).blindCutAnywhere === undefined) q.blindCutAnywhere = true;
+      q.ledPitch = ledPitchOf(q);
+      return q;
+    }),
+  };
+}
+
 export const PRESET_COLORS: { name: string; color: string; jacket: string }[] = [
   { name: 'Buz mavisi', color: '#3aa0ff', jacket: '#e8f1fb' },
   { name: 'Mavi', color: '#2f6bff', jacket: '#dfe8ff' },
   { name: 'Kırmızı', color: '#ff2a3a', jacket: '#f5e1e3' },
   { name: 'Altın sarısı', color: '#ffb31a', jacket: '#f7edd9' },
+  { name: 'Turuncu', color: '#ff6a1a', jacket: '#f8e6da' },
   { name: 'Pembe', color: '#ff3fb4', jacket: '#f8e2f0' },
   { name: 'Mor', color: '#a64dff', jacket: '#ece2f8' },
   { name: 'Yeşil', color: '#2dff6a', jacket: '#e2f5e8' },

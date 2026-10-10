@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { PlanResult, StripProfile } from '../core/model/types';
 import { cumLengths, tangentAt } from '../core/geom/polyline';
 import { emissionColor, hexToLinear, fitPoissonWeights } from './kernels';
+import { ledPitchOf } from '../core/model/defaults';
 
 /**
  * Light engine: renders the planned strips into a sign-plane grid (mm), then spreads that light
@@ -169,8 +170,10 @@ export function buildStripGeometry(plan: PlanResult, profiles: Map<string, Strip
     const hw = p.width / 2;
     const col = emissionColor(p.color);
     const jac = hexToLinear(p.jacketColor);
-    const nLed = Math.round((pc.units * p.cutUnit) / p.ledPitch);
-    const led = [pc.capStart + p.ledPitch / 2, p.ledPitch, nLed, Math.max(0.5, p.diffusion * p.ledPitch)];
+    // only the whole units light up; a part unit at the blind end stays dark
+    const pitch = ledPitchOf(p);
+    const nLed = pc.units * Math.max(1, p.ledsPerUnit);
+    const led = [pc.capStart + pitch / 2, pitch, nLed, Math.max(0.5, p.diffusion * pitch)];
     for (let i = 0; i < pc.pts.length; i++) {
       const c = pc.pts[i];
       const t = tangentAt(pc.pts, cum, cum[i], 0.6);

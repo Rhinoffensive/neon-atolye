@@ -20,7 +20,7 @@ export function planWiring(
   const load = [0, ...holes.map((h) => {
     const pc = pieceById.get(h.pieceId)!;
     const pr = profiles.get(pc.profileId)!;
-    return (pr.wattPerM * pc.stripLength) / 1000 / pr.voltage;
+    return (pr.wattPerM * pc.units * pr.cutUnit) / 1000 / pr.voltage;
   })];
   const n = nodes.length;
   const parent = new Array<number>(n).fill(-1);
@@ -64,7 +64,7 @@ export function planWiring(
   const voltage = pieces.length ? profiles.get(pieces[0].profileId)?.voltage ?? 12 : 12;
   const watts = pieces.reduce((a, pc) => {
     const pr = profiles.get(pc.profileId)!;
-    return a + (pr.wattPerM * pc.stripLength) / 1000;
+    return a + (pr.wattPerM * pc.units * pr.cutUnit) / 1000;
   }, 0);
   // worst drop entry -> any hole for a given cross-section
   const dropFor = (A: number) => {

@@ -2,7 +2,7 @@ import { jsPDF } from 'jspdf';
 import type { Doc, Piece, PlanResult, StripProfile } from '../model/types';
 import type { Vec } from '../geom/vec';
 import { cumLengths, pointAt, tangentAt, rdp, slice } from '../geom/polyline';
-import { stepText } from '../plan/bends';
+import { stepText, unitsLabel, cutInstruction } from '../plan/bends';
 
 export interface PdfFontData {
   regular: string;
@@ -81,18 +81,20 @@ function drawPlan(
     for (const pc of plan.pieces) {
       const p = profiles.get(pc.profileId)!;
       const cum = cumLengths(pc.pts);
-      for (let k = 0; k <= pc.units; k++) {
-        const s = pc.capStart + k * p.cutUnit;
+      const tail = pc.darkTail > 0.5;
+      const ks = [...Array.from({ length: pc.units + 1 }, (_, k) => k), ...(tail ? [-1] : [])];
+      for (const k of ks) {
+        const s = k < 0 ? pc.capStart + pc.stripLength : pc.capStart + k * p.cutUnit;
         const c = pointAt(pc.pts, cum, s);
         const t = tangentAt(pc.pts, cum, s, 1);
         const h = p.width / 2 + 3;
         const a = tf({ x: c.x + t.y * h, y: c.y - t.x * h });
         const b = tf({ x: c.x - t.y * h, y: c.y + t.x * h });
-        const end = k === 0 || k === pc.units;
+        const end = k === 0 || k < 0 || (k === pc.units && !tail);
         pdf.setDrawColor(end ? 200 : 0, 0, 0);
         pdf.setLineWidth(end ? 0.35 : 0.2);
         pdf.line(a.x, a.y, b.x, b.y);
-        if (opts.markNumbers && k > 0 && k < pc.units) {
+        if (opts.markNumbers && !end && k > 0) {
           const lab = tf({ x: c.x - t.y * (h + 2.2), y: c.y + t.x * (h + 2.2) });
           pdf.setFontSize(5.5);
           pdf.setTextColor(90);
@@ -193,10 +195,22 @@ function drawUnrolled(pdf: jsPDF, pc: Piece, p: StripProfile, x0: number, y0: nu
       }
     }
     // marks
+    const tail = pc.darkTail > 0.5;
+    if (tail) {
+      const s = pc.capStart + pc.stripLength;
+      if (s >= a - 0.01 && s <= b + 0.01) {
+        pdf.setDrawColor(200, 0, 0);
+        pdf.setLineWidth(0.4);
+        pdf.line(X(s), by - 1.6, X(s), by + bodyH + 1.6);
+        pdf.setFontSize(5.5);
+        pdf.setTextColor(200, 0, 0);
+        pdf.text('kes', X(s), by - 2.2, { align: 'center' });
+      }
+    }
     for (let k = 0; k <= pc.units; k++) {
       const s = pc.capStart + k * p.cutUnit;
       if (s < a - 0.01 || s > b + 0.01) continue;
-      const end = k === 0 || k === pc.units;
+      const end = k === 0 || (k === pc.units && !tail);
       pdf.setDrawColor(end ? 200 : 0, 0, 0);
       pdf.setLineWidth(end ? 0.4 : 0.25);
       pdf.line(X(s), by - 0.8, X(s), by + bodyH + 0.8);
@@ -265,7 +279,7 @@ export function buildTemplatePdf(doc: Doc, plan: PlanResult, fonts: PdfFontData 
     pdf.circle(MARGIN + 4, y - 1, 1.3, 'F');
     pdf.setTextColor(s.usedMm > s.availableMm ? 200 : 0, 0, 0);
     pdf.text(
-      `${p.name}: ${s.pieces} parça, ${s.usedMm / p.cutUnit} birim = ${fmtCm(s.usedMm)} (stok ${fmtCm(s.availableMm)}, kalan ${fmtCm(s.availableMm - s.usedMm)})`,
+      `${p.name}: ${s.pieces} parça, ${Math.round(s.usedMm / p.cutUnit)} birim rulodan = ${fmtCm(s.usedMm)} (stok ${fmtCm(s.availableMm)}, kalan ${fmtCm(s.availableMm - s.usedMm)})`,
       MARGIN + 7,
       y,
     );
@@ -310,7 +324,7 @@ export function buildTemplatePdf(doc: Doc, plan: PlanResult, fonts: PdfFontData 
   ['Parça', 'Şerit', 'Birim', 'Boy', 'Uçlar', 'Büküm'].forEach((t, i) => pdf.text(t, cols[i], y));
   pdf.setFont(FONT, 'normal');
   y += 1.5;
-  const sorted = [...plan.pieces].sort((a, c) => c.units - a.units || a.no - c.no);
+  const sorted = [...plan.pieces].sort((a, c) => c.stripLength - a.stripLength || a.no - c.no);
   for (const pc of sorted) {
     if (y > A4.h - 12) {
       pdf.addPage();
@@ -323,7 +337,7 @@ export function buildTemplatePdf(doc: Doc, plan: PlanResult, fonts: PdfFontData 
     pdf.line(MARGIN + 2, y - 3.2, A4.w - MARGIN - 2, y - 3.2);
     pdf.text(`P${pc.no}`, cols[0], y);
     pdf.text(p.name, cols[1], y);
-    pdf.text(String(pc.units), cols[2], y);
+    pdf.text(unitsLabel(pc), cols[2], y);
     pdf.text(fmtCm(pc.stripLength), cols[3], y);
     pdf.text(`${END_TR[pc.startKind]} → ${END_TR[pc.endKind]}`, cols[4], y);
     pdf.text(String(pc.bends.filter((s) => s.kind === 'arc').length), cols[5], y);
@@ -345,9 +359,12 @@ export function buildTemplatePdf(doc: Doc, plan: PlanResult, fonts: PdfFontData 
     pdf.setFont(FONT, 'bold');
     pdf.setFontSize(10);
     pdf.setTextColor(0);
-    pdf.text(`P${pc.no} · ${p.name} · ${pc.units} birim (${fmtCm(pc.stripLength)})${pc.loop ? ' · kapalı harf' : ''}`, MARGIN + 2, y);
+    pdf.text(`P${pc.no} · ${p.name} · ${unitsLabel(pc)} (${fmtCm(pc.stripLength)})${pc.loop ? ' · kapalı harf' : ''}`, MARGIN + 2, y);
     pdf.setFont(FONT, 'normal');
-    y = drawUnrolled(pdf, pc, p, MARGIN + 6, y + 1, rowLen);
+    pdf.setFontSize(8);
+    pdf.setTextColor(60);
+    pdf.text(cutInstruction(pc), MARGIN + 2, y + 4.2);
+    y = drawUnrolled(pdf, pc, p, MARGIN + 6, y + 5, rowLen);
     pdf.setFontSize(8);
     for (const st of pc.bends) {
       if (y > A4.h - 10) {

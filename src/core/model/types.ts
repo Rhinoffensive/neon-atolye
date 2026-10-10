@@ -12,8 +12,12 @@ export interface StripProfile {
   jacketColor: string;
   /** distance between cut marks */
   cutUnit: number;
-  /** distance between LEDs */
+  /** LEDs in one cut unit (they sit evenly, half a pitch from each cut) */
+  ledsPerUnit: number;
+  /** derived: cutUnit / ledsPerUnit, kept in sync for convenience */
   ledPitch: number;
+  /** the blind (unwired) end may be cut between marks; that last part segment stays dark */
+  blindCutAnywhere: boolean;
   /** lit face width */
   width: number;
   /** strip height (perpendicular to the board) */
@@ -45,6 +49,8 @@ interface ItemBase {
   y: number;
   /** degrees, clockwise */
   rotation: number;
+  /** items inserted together (a template) move and scale together */
+  groupId?: string;
 }
 
 export interface TextItem extends ItemBase {
@@ -134,9 +140,14 @@ export interface Piece {
   /** physical footprint centreline, feed end first, cap tips included */
   pts: Vec[];
   length: number;
+  /** whole cut units that light up */
   units: number;
-  /** N * cutUnit */
+  /** strip between the feed cut and the blind cut (>= units * cutUnit) */
   stripLength: number;
+  /** cut units taken from the roll (a part unit at the blind end is used up too) */
+  consumedUnits: number;
+  /** unlit strip after the last whole unit (blind end cut between marks) */
+  darkTail: number;
   capStart: number;
   capEnd: number;
   /** arc-length positions along pts where the light reaches ~50 % */

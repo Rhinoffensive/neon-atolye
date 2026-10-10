@@ -1,8 +1,9 @@
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
+import { TemplateGallery } from './TemplateGallery';
 import { useStore } from './store';
 import { Num, Section, Select } from './ui';
 import { FONT_LIST } from '../core/text/svgfont';
-import { defaultProfile, defaultText, PRESET_COLORS, uid } from '../core/model/defaults';
+import { defaultProfile, defaultText, ledPitchOf, PRESET_COLORS, uid } from '../core/model/defaults';
 import type { Item, PathItem, StripProfile, TextItem } from '../core/model/types';
 import { importSvg, scalePathD } from './importSvg';
 import { boundsOf, boundsValid } from '../core/geom/vec';
@@ -20,6 +21,7 @@ export function LeftPanel() {
   const update = useStore((s) => s.update);
   const setS = useStore((s) => s.set);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [gallery, setGallery] = useState(false);
   const sel = doc.items.find((i) => i.id === selectedItemId) ?? null;
 
   const addText = () => {
@@ -66,6 +68,9 @@ export function LeftPanel() {
             ✎ Çiz
           </button>
           <button onClick={() => fileRef.current?.click()}>⇪ SVG</button>
+          <button className="accent" onClick={() => setGallery(true)}>
+            ★ Şablon
+          </button>
           <input
             ref={fileRef}
             type="file"
@@ -110,6 +115,8 @@ export function LeftPanel() {
         </ul>
       </Section>
 
+      {gallery && <TemplateGallery onClose={() => setGallery(false)} />}
+      {sel?.groupId && <GroupSection groupId={sel.groupId} />}
       {sel && (
         <Section title={sel.kind === 'text' ? 'Yazı' : 'Çizim'}>
           {sel.kind === 'text' ? <TextProps it={sel} patch={patchItem} /> : <PathProps it={sel} patch={patchItem} />}
@@ -274,8 +281,32 @@ function ProfilesSection() {
         <input type="color" value={p.color} onChange={(e) => set((x) => void (x.color = e.target.value), 'pcolor')} />
       </div>
       <div className="grid2">
-        <Num label="Kesim birimi" unit="mm" value={p.cutUnit} min={1} onChange={(v) => set((x) => void (x.cutUnit = v), 'pu')} />
-        <Num label="LED aralığı" unit="mm" value={p.ledPitch} min={1} step={0.1} onChange={(v) => set((x) => void (x.ledPitch = v), 'pp')} />
+        <Num
+          label="Kesim birimi"
+          unit="mm"
+          value={p.cutUnit}
+          min={1}
+          onChange={(v) =>
+            set((x) => {
+              x.cutUnit = v;
+              x.ledPitch = ledPitchOf(x);
+            }, 'pu')
+          }
+        />
+        <Num
+          label="Birimdeki LED"
+          unit="adet"
+          value={p.ledsPerUnit}
+          min={1}
+          step={1}
+          hint={`LED aralığı ${ledPitchOf(p).toFixed(2).replace('.', ',')} mm (${Math.round((1000 / p.cutUnit) * p.ledsPerUnit)} LED/m)`}
+          onChange={(v) =>
+            set((x) => {
+              x.ledsPerUnit = Math.max(1, Math.round(v));
+              x.ledPitch = ledPitchOf(x);
+            }, 'pl')
+          }
+        />
         <Num label="Genişlik" unit="mm" value={p.width} min={2} step={0.5} onChange={(v) => set((x) => void (x.width = v), 'pw')} />
         <Num label="Yükseklik" unit="mm" value={p.height} min={2} step={0.5} onChange={(v) => set((x) => void (x.height = v), 'ph')} />
         <Num label="Min R (uyarı)" unit="mm" value={p.rMinWarn} min={1} onChange={(v) => set((x) => void (x.rMinWarn = v), 'prw')} />
@@ -287,6 +318,13 @@ function ProfilesSection() {
         <Num label="Stok" unit="m" value={p.stockMm / 1000} min={0} step={0.5} onChange={(v) => set((x) => void (x.stockMm = v * 1000), 'pst')} />
         <Num label="Difüzyon q" value={p.diffusion} min={0.2} max={1} step={0.05} onChange={(v) => set((x) => void (x.diffusion = v), 'pq')} hint="0,35 = nokta nokta görünen ucuz şerit, 0,6 = kusursuz düz çizgi" />
       </div>
+      <label className="field check" title="Kablosuz uç iki işaret arasından kesilebilir; yarım kalan birim yanmaz ama şerit gövdesi çizime tam oturur.">
+        <input type="checkbox" checked={p.blindCutAnywhere} onChange={(e) => set((x) => void (x.blindCutAnywhere = e.target.checked))} />
+        <span>Kör uç işaret dışından kesilebilir</span>
+      </label>
+      <p className="hint">
+        {p.ledsPerUnit} LED / {p.cutUnit} mm → aralık {ledPitchOf(p).toFixed(2).replace('.', ',')} mm. Besleme ucu her zaman kesim işaretinden kesilir.
+      </p>
       <Select
         label="Kablo çıkışı"
         value={p.cableExit}
@@ -338,6 +376,63 @@ function SettingsSection() {
         <Num label="Maks. parça" unit="mm" value={s.maxPieceLength} min={100} step={50} onChange={(v) => set((x) => void (x.maxPieceLength = v), 'mpl')} />
         <Num label="Birleştirme" unit="mm" value={s.joinTolerance} min={0} step={0.5} onChange={(v) => set((x) => void (x.joinTolerance = v), 'jt')} hint="Uçları bu kadar yakın çizgiler tek parça sayılır." />
         <Num label="Duvar mesafesi" unit="mm" value={s.standoff} min={0} step={5} onChange={(v) => set((x) => void (x.standoff = v), 'so')} />
+      </div>
+    </Section>
+  );
+}
+
+function GroupSection({ groupId }: { groupId: string }) {
+  const doc = useStore((s) => s.doc);
+  const strokes = useStore((s) => s.strokes);
+  const update = useStore((s) => s.update);
+  const setS = useStore((s) => s.set);
+  const members = doc.items.filter((i) => i.groupId === groupId);
+  const ids = new Set(members.map((i) => i.id));
+  const b = boundsOf(strokes.filter((s) => ids.has(s.itemId)).map((s) => s.pts));
+  const w = boundsValid(b) ? b.maxX - b.minX : 0;
+  const h = boundsValid(b) ? b.maxY - b.minY : 0;
+  const name = members[0]?.kind === 'path' ? members[0].name.split(' · ')[0] : 'Grup';
+  const scale = (k: number) =>
+    update((d) => {
+      const ms = d.items.filter((i) => i.groupId === groupId);
+      const ax = Math.min(...ms.map((i) => i.x));
+      const ay = Math.min(...ms.map((i) => i.y));
+      for (const it of ms) {
+        it.x = +(ax + (it.x - ax) * k).toFixed(2);
+        it.y = +(ay + (it.y - ay) * k).toFixed(2);
+        if (it.kind === 'text') it.capHeight = +(it.capHeight * k).toFixed(1);
+        else it.d = scalePathD(it.d, k);
+      }
+    }, `gscale-${groupId}`);
+  return (
+    <Section title={`Grup: ${name} (${members.length} parça)`}>
+      {w > 0 && (
+        <div className="grid2">
+          <Num label="Grup genişliği" unit="mm" value={Math.round(w)} min={20} step={10} onChange={(v) => scale(v / w)} />
+          <Num label="Grup yüksekliği" unit="mm" value={Math.round(h)} min={20} step={10} onChange={(v) => scale(v / h)} />
+        </div>
+      )}
+      <div className="btnrow small">
+        <button onClick={() => scale(1.1)}>＋ %10</button>
+        <button onClick={() => scale(1 / 1.1)}>− %10</button>
+        <button
+          onClick={() =>
+            update((d) => {
+              for (const it of d.items) if (it.groupId === groupId) delete it.groupId;
+            })
+          }
+        >
+          Gruptan ayır
+        </button>
+        <button
+          className="danger"
+          onClick={() => {
+            update((d) => void (d.items = d.items.filter((i) => i.groupId !== groupId)));
+            setS({ selectedItemId: null, selectedPieceId: null });
+          }}
+        >
+          Grubu sil
+        </button>
       </div>
     </Section>
   );

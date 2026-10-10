@@ -43,8 +43,9 @@ export function planToSvg(doc: Doc, plan: PlanResult, margin = 20): string {
       const p = profiles.get(pc.profileId)!;
       const cum = cumLengths(pc.pts);
       let out = '';
-      for (let k = 0; k <= pc.units; k++) {
-        const s = pc.capStart + k * p.cutUnit;
+      const ss = Array.from({ length: pc.units + 1 }, (_, k) => pc.capStart + k * p.cutUnit);
+      if (pc.darkTail > 0.5) ss.push(pc.capStart + pc.stripLength);
+      for (const s of ss) {
         const c = pointAt(pc.pts, cum, s);
         const t = tangentAt(pc.pts, cum, s, 1);
         const h = p.width / 2 + 3;

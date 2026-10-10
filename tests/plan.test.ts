@@ -54,21 +54,57 @@ describe('svg path', () => {
 });
 
 describe('planner', () => {
-  it('straight line: whole units, light ends within half a unit of the drawing', () => {
+  it('straight line: feed end on a mark, light within a quarter unit at each end', () => {
     const r = planDesign([line(0, 0, 100, 0)], [prof], set);
     expect(r.pieces).toHaveLength(1);
     const p = r.pieces[0];
     expect(Number.isInteger(p.units)).toBe(true);
-    expect(p.length).toBeCloseTo(p.units * prof.cutUnit + prof.capFeed + prof.capBlind, 3);
+    expect(p.stripLength).toBeGreaterThanOrEqual(p.units * prof.cutUnit - 1e-6);
+    expect(p.darkTail).toBeLessThan(prof.cutUnit);
+    expect(p.consumedUnits).toBe(Math.ceil(p.stripLength / prof.cutUnit - 1e-6));
     const lit = p.litEnd - p.litStart;
     expect(Math.abs(lit - 100)).toBeLessThanOrEqual(prof.cutUnit / 2 + 0.01);
+    expect(errors(r)).toHaveLength(0);
+  });
+
+  it('whole-unit mode: every piece is exactly N units plus caps', () => {
+    const whole = { ...prof, blindCutAnywhere: false };
+    const r = planDesign([line(0, 0, 100, 0), stroke(circle(0, 80, 50), true)], [whole], set);
+    for (const p of r.pieces) {
+      expect(p.length).toBeCloseTo(p.units * whole.cutUnit + whole.capFeed + whole.capBlind, 3);
+      expect(p.darkTail).toBeCloseTo(0, 6);
+    }
+    const lit = r.pieces.find((p) => !p.loop)!;
+    expect(Math.abs(lit.litEnd - lit.litStart - 100)).toBeLessThanOrEqual(whole.cutUnit / 2 + 0.01);
+  });
+
+  it('blind end cut between marks keeps the drawn body; the part unit stays dark', () => {
+    // 4.6 units of strip between two held ends: 4 units light up, 0.6 unit stays dark
+    const st = stroke([
+      { x: 0, y: 0 },
+      { x: 100, y: 0 },
+      { x: 100, y: 200 },
+    ]);
+    const r = planDesign([st], [prof], set);
+    for (const p of r.pieces) {
+      expect(p.stripLength - p.units * prof.cutUnit).toBeCloseTo(p.darkTail, 6);
+      expect(p.litEnd).toBeCloseTo(p.capStart + p.units * prof.cutUnit - prof.ledPitch / 2, 6);
+    }
     expect(errors(r)).toHaveLength(0);
   });
 
   it('dot becomes a one-unit dash', () => {
     const r = planDesign([line(0, 0, 3, -4)], [prof], set);
     expect(r.pieces[0].units).toBe(1);
-    expect(r.pieces[0].length).toBeCloseTo(25 + 12, 3);
+    expect(r.pieces[0].length).toBeGreaterThanOrEqual(25 + 12 - 1e-6);
+  });
+
+  it('more LEDs per unit = shorter dark ends', () => {
+    const six = { ...prof, ledsPerUnit: 6, ledPitch: 25 / 6 };
+    const a = planDesign([line(0, 0, 100, 0)], [prof], set).pieces[0];
+    const b = planDesign([line(0, 0, 100, 0)], [six], set).pieces[0];
+    expect(a.litStart - a.capStart).toBeCloseTo(25 / 6, 6);
+    expect(b.litStart - b.capStart).toBeCloseTo(25 / 12, 6);
   });
 
   it('closed circle: one looped piece with a seam gap, no overlap', () => {
@@ -79,7 +115,9 @@ describe('planner', () => {
     expect(p.startKind).toBe('seam');
     const circ = 2 * Math.PI * 50;
     expect(p.length).toBeLessThan(circ);
-    expect(circ - p.length).toBeLessThan(prof.cutUnit + 3 * set.clearance);
+    // blind end cut between marks: the ring is closed except the clearance gap
+    expect(circ - p.length).toBeLessThan(4 * set.clearance);
+    expect(p.darkTail).toBeLessThan(prof.cutUnit);
     expect(errors(r)).toHaveLength(0);
   });
 
@@ -172,7 +210,7 @@ describe('text', () => {
     const r = planDesign(strokes, [prof], set);
     expect(r.pieces.length).toBeGreaterThan(2);
     expect(r.pieces.some((p) => p.units === 1)).toBe(true);
-    for (const p of r.pieces) expect(p.length).toBeCloseTo(p.units * 25 + 12, 1);
+    for (const p of r.pieces) expect(p.stripLength).toBeGreaterThanOrEqual(p.units * 25 - 1e-6);
     // print a summary to eyeball
     console.log(
       r.pieces.map((p) => `P${p.no}: ${p.units}u ${p.startKind}/${p.endKind}`).join(', '),

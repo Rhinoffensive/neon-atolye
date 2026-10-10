@@ -10,7 +10,7 @@ import type { StripProfile } from '../core/model/types';
 
 type Drag =
   | { mode: 'pan'; sx: number; sy: number; cx: number; cy: number }
-  | { mode: 'move'; sx: number; sy: number; itemId: string; ox: number; oy: number; moved: boolean }
+  | { mode: 'move'; sx: number; sy: number; members: { id: string; ox: number; oy: number }[]; moved: boolean }
   | { mode: 'draw'; pts: Vec[] }
   | { mode: 'pinch'; d0: number; m0: number; mid: Vec; cx: number; cy: number };
 
@@ -143,7 +143,13 @@ export function Canvas() {
     setS({ selectedPieceId: pieceId, selectedItemId: itemId });
     const item = doc.items.find((i) => i.id === itemId);
     if (item) {
-      drag.current = { mode: 'move', sx: m.x, sy: m.y, itemId: item.id, ox: item.x, oy: item.y, moved: false };
+      // template parts (same group) move together
+      const members = (item.groupId ? doc.items.filter((i) => i.groupId === item.groupId) : [item]).map((i) => ({
+        id: i.id,
+        ox: i.x,
+        oy: i.y,
+      }));
+      drag.current = { mode: 'move', sx: m.x, sy: m.y, members, moved: false };
     } else {
       drag.current = { mode: 'pan', sx: e.clientX, sy: e.clientY, cx: cam.cx, cy: cam.cy };
     }
@@ -169,12 +175,14 @@ export function Canvas() {
       d.moved = true;
       const snap = (v: number) => (e.shiftKey ? v : Math.round(v));
       update((doc) => {
-        const it = doc.items.find((i) => i.id === d.itemId);
-        if (it) {
-          it.x = snap(d.ox + dx);
-          it.y = snap(d.oy + dy);
+        for (const mb of d.members) {
+          const it = doc.items.find((i) => i.id === mb.id);
+          if (it) {
+            it.x = snap(mb.ox + dx);
+            it.y = snap(mb.oy + dy);
+          }
         }
-      }, `move-${d.itemId}`);
+      }, `move-${d.members[0].id}`);
     } else if (d.mode === 'draw') {
       const m = toMm(e.clientX, e.clientY);
       if (dist(m, d.pts[d.pts.length - 1]) > 1.5 * px) {
@@ -229,13 +237,15 @@ export function Canvas() {
     return plan.pieces.map((pc) => {
       const p = profOf(pc.profileId);
       const cum = cumLengths(pc.pts);
-      const marks: { a: Vec; b: Vec; k: number }[] = [];
-      for (let k = 0; k <= pc.units; k++) {
-        const s = pc.capStart + k * p.cutUnit;
+      const marks: { a: Vec; b: Vec; k: number; cut: boolean }[] = [];
+      const tick = (s: number, k: number, cut: boolean) => {
         const f = frameAt(pc.pts, s, cum);
         const h = p.width / 2 + 2.5;
-        marks.push({ a: { x: f.p.x - f.n.x * h, y: f.p.y - f.n.y * h }, b: { x: f.p.x + f.n.x * h, y: f.p.y + f.n.y * h }, k });
-      }
+        marks.push({ a: { x: f.p.x - f.n.x * h, y: f.p.y - f.n.y * h }, b: { x: f.p.x + f.n.x * h, y: f.p.y + f.n.y * h }, k, cut });
+      };
+      const tail = pc.darkTail > 0.3;
+      for (let k = 0; k <= pc.units; k++) tick(pc.capStart + k * p.cutUnit, k, k === 0 || (k === pc.units && !tail));
+      if (tail) tick(pc.capStart + pc.stripLength, -1, true);
       return {
         pc,
         p,
@@ -302,7 +312,7 @@ export function Canvas() {
             d={ptsToD(h.pts)}
             fill="none"
             stroke={h.severity === 'error' ? 'var(--err)' : 'var(--warn)'}
-            strokeOpacity={0.45}
+            strokeOpacity={h.severity === 'error' ? 0.5 : 0.2}
             strokeWidth={14}
             strokeLinecap="round"
           />
@@ -351,8 +361,8 @@ export function Canvas() {
                   y1={m.a.y}
                   x2={m.b.x}
                   y2={m.b.y}
-                  stroke={m.k === 0 || m.k === pc.units ? 'var(--cut-end)' : 'var(--mark)'}
-                  strokeWidth={m.k === 0 || m.k === pc.units ? 1.6 * px : 0.9 * px}
+                  stroke={m.cut ? 'var(--cut-end)' : 'var(--mark)'}
+                  strokeWidth={m.cut ? 1.6 * px : 0.9 * px}
                 />
               ))}
             </g>
@@ -380,7 +390,7 @@ export function Canvas() {
           {showLabels &&
             pieceEls?.map(({ pc, marks }) =>
               marks
-                .filter((m) => m.k > 0 && m.k < pc.units)
+                .filter((m) => !m.cut && m.k > 0)
                 .map((m) => (
                   <text
                     key={`ml${pc.id}${m.k}`}

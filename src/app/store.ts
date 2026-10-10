@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { produce } from 'immer';
 import type { Doc, DesignStroke, PlanResult } from '../core/model/types';
-import { newDoc } from '../core/model/defaults';
+import { newDoc, normalizeDoc } from '../core/model/defaults';
 
 export type View = 'design' | 'plan' | 'preview' | 'build';
 export type Tool = 'select' | 'draw';
@@ -40,7 +40,7 @@ function loadDoc(): Doc {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const d = JSON.parse(raw) as Doc;
-      if (d?.version === 1 && Array.isArray(d.items) && d.profiles?.length) return d;
+      if (d?.version === 1 && Array.isArray(d.items) && d.profiles?.length) return normalizeDoc(d);
     }
   } catch {
     /* ignore corrupt storage */
@@ -86,8 +86,9 @@ export const useStore = create<State>((set, get) => ({
       lastAt: now,
     });
   },
-  replaceDoc: (d) => {
+  replaceDoc: (raw) => {
     const s = get();
+    const d = normalizeDoc(raw);
     set({ doc: d, past: [...s.past.slice(-80), s.doc], future: [], selectedItemId: null, selectedPieceId: null });
   },
   undo: () => {

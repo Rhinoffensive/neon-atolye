@@ -5,8 +5,9 @@
 LED neon flex tabelaları tasarlamak, **yapım planını** çıkarmak ve sonucu önizlemek için web aracı. Önizleme masaüstünde yapılır, AR ile duvarda görmek Android telefonda çalışır.
 
 - **Tasarım:** Türkçe karakterleri tam olan tek-çizgi fontlarla yazı yazılır (EMS Allure / Readability / Tech / Felix / Nixish, Hershey Script / Sans). Ayrıca serbest çizim ve SVG içe aktarma var.
+- **Şablonlar:** 16 hazır neon çizim (gülen yüz, göz kırpan, havalı, kalp, yıldız, şimşek, bira, kuru kafa, kahve, kokteyl, dondurma, basketbol, ay yıldız, nota, alev, taç). Hepsi 6 mm şerit için çizildi ve varsayılan boyutta planlayıcıdan hatasız geçer. Çok renkli şablonlar renk başına bir şerit profili açar; parçalar grup olarak birlikte taşınır ve boyutlanır.
 - **Plan:** Şeridin fiziğine göre hesaplanır:
-  - parçalar, 25 mm'lik kesim birimleri ve uç kapakları;
+  - parçalar, 25 mm'lik kesim birimleri ve uç kapakları. Besleme ucu her zaman kesim işaretinden kesilir; kör uç (profilde açıksa) iki işaret arasından da kesilebilir: yarım kalan birim yanmaz ama şerit gövdesi çizime tam oturur, köşe/kesişim/ek yerlerinde gereksiz boşluk kalmaz;
   - köşelerin yuvarlatılması ya da kesilmesi;
   - kesişimlerde alttaki çizginin kesilmesi;
   - şeritler arası boşluk;
@@ -67,6 +68,8 @@ Hata ayıklama için bilgisayarda Chrome'da `chrome://inspect` aç. Düz beyaz d
 | Alan | Nasıl bulunur |
 |---|---|
 | Kesim birimi | Şeritteki makas işaretleri arası (12 V'ta genelde 25 mm) |
+| Birimdeki LED | İki kesim işareti arasındaki LED sayısı (ör. 3 → 120 LED/m, 6 → 240 LED/m); uçlardaki karanlık ve difüzyon buna göre hesaplanır |
+| Kör uç serbest kesim | Kablosuz uç işaret dışından kesilebiliyorsa açık bırak (varsayılan) |
 | Min R (hata/uyarı) | Şeridi R10/15/20/30'luk yaylara bükerek dene; zorlamadan dönebildiği en küçük yarıçap |
 | Besleme / kör kapak | Kapaklı ucun kesim işaretinden ne kadar dışarı taştığı |
 | Kablo çıkışı | Kapağın kablosu alttan mı uçtan mı çıkıyor (delik yeri buna göre) |

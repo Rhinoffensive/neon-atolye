@@ -1,7 +1,7 @@
 import { useStore } from './store';
 import { Bar, Section } from './ui';
 import { fmtCm, fmtLen, shade } from './geomUi';
-import { stepText, markLabel } from '../core/plan/bends';
+import { stepText, cutInstruction, unitsLabel, blindCutLabel } from '../core/plan/bends';
 import type { Doc, Piece, StripProfile, EndKind } from '../core/model/types';
 import { scalePathD } from './importSvg';
 
@@ -140,7 +140,7 @@ export function RightPanel() {
                   <td>
                     <span className="dot" style={{ background: pr.color }} />
                   </td>
-                  <td>{p.units}</td>
+                  <td>{p.darkTail > 0.5 ? `${p.units}+` : p.units}</td>
                   <td>{fmtCm(p.stripLength)}</td>
                   <td className="muted small">
                     {END_TR[p.startKind]} → {END_TR[p.endKind]}
@@ -194,7 +194,7 @@ function PieceDetail({ piece, prof }: { piece: Piece; prof: StripProfile }) {
   return (
     <Section title={`P${piece.no} · büküm adımları`}>
       <p className="small">
-        Rulodan <b>{piece.units} birim</b> ({fmtCm(piece.stripLength)}) kes. Besleme ucu: İ0.{' '}
+        {cutInstruction(piece)}{' '}
         {piece.loop && 'Kapalı harf: uçlar ek yerinde buluşuyor. '}
         {Math.abs(piece.residual) > 0.5 &&
           `Uçlar 25'lik birime oturması için toplam ${Math.round(Math.abs(piece.residual))} mm ${piece.residual > 0 ? 'uzatıldı' : 'kısaltıldı'}.`}
@@ -213,7 +213,7 @@ function PieceDetail({ piece, prof }: { piece: Piece; prof: StripProfile }) {
       </ol>
       <p className="muted small">
         İ0 = besleme ucundaki kesim yeri, İ1, İ2… şeridin üstündeki kesim işaretleri. "İ3+8" = 3. işaretten 8 mm sonra.
-        {` Bitiş: ${markLabel(piece.units, 0)} (kör uç).`}
+        {` Kör uç: ${blindCutLabel(piece)}.`}
       </p>
     </Section>
   );
@@ -253,11 +253,15 @@ export function StripDiagram({ piece, prof }: { piece: Piece; prof: StripProfile
               </g>
             );
           })}
+        {piece.darkTail > 0.5 && (
+          <line x1={cut0 + piece.stripLength} y1={y - 2} x2={cut0 + piece.stripLength} y2={y + sw + 2} stroke="var(--err)" strokeWidth={0.8} />
+        )}
         {Array.from({ length: piece.units + 1 }, (_, k) => {
           const x = cut0 + k * prof.cutUnit;
+          const cut = k === 0 || (k === piece.units && piece.darkTail <= 0.5);
           return (
             <g key={k}>
-              <line x1={x} y1={y - 1} x2={x} y2={y + sw + 1} stroke="#fff" strokeWidth={k === 0 || k === piece.units ? 0.8 : 0.4} />
+              <line x1={x} y1={y - 1} x2={x} y2={y + sw + 1} stroke={cut ? 'var(--err)' : '#fff'} strokeWidth={cut ? 0.8 : 0.4} />
               <text x={x} y={y + sw + 6} fontSize={4} textAnchor="middle" fill="var(--muted)">
                 {k}
               </text>
@@ -313,14 +317,14 @@ function BuildPanel() {
             <li>Şablon sayfalarını + işaretleri üst üste gelecek şekilde bantla.</li>
             <li>Şablonu şeffaf pleksinin (ya da panonun) altına koy.</li>
             <li>
-              Rulodan kesilecekler (toplam {plan.pieces.reduce((a, p) => a + p.units, 0)} birim ={' '}
-              {fmtLen(plan.pieces.reduce((a, p) => a + p.stripLength, 0))}):
+              Rulodan kesilecekler (toplam {plan.pieces.reduce((a, p) => a + p.consumedUnits, 0)} birim ={' '}
+              {fmtLen(plan.pieces.reduce((a, p) => a + p.consumedUnits * (profiles.get(p.profileId)?.cutUnit ?? 25), 0))}):
               <div className="cutlist">
                 {[...plan.pieces]
-                  .sort((a, b) => b.units - a.units)
+                  .sort((a, b) => b.stripLength - a.stripLength)
                   .map((p) => (
                     <span key={p.id} className="chip on" style={{ borderColor: profiles.get(p.profileId)?.color }}>
-                      P{p.no}: {p.units}
+                      P{p.no}: {unitsLabel(p)}
                     </span>
                   ))}
               </div>
@@ -336,10 +340,11 @@ function BuildPanel() {
           <div className="build-card">
             <div className="big-line">
               <span className="dot" style={{ background: profiles.get(piece.profileId)?.color }} />
-              P{piece.no}: rulodan <b>{piece.units} birim</b> kes ({fmtCm(piece.stripLength)})
+              P{piece.no}: <b>{unitsLabel(piece)}</b> ({fmtCm(piece.stripLength)})
             </div>
             <StripDiagram piece={piece} prof={profiles.get(piece.profileId)!} />
             <ol className="steps big-steps">
+              <li>{cutInstruction(piece)}</li>
               <li>
                 Besleme ucunu (İ0) lehimle, {profiles.get(piece.profileId)?.cableExit === 'bottom' ? 'alttan çıkışlı' : 'uçtan çıkışlı'} kapağı tak; diğer uca kör kapak.
               </li>

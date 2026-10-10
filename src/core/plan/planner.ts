@@ -17,6 +17,7 @@ import { findCrossings, resolveCrossings } from './crossings';
 import { Clearance, type PG, makePG, pgPoint, pgPolyline, pgTangent, sideSamples, faceSamples } from './clearance';
 import { bendSteps } from './bends';
 import { planWiring } from './wiring';
+import { ledPitchOf } from '../model/defaults';
 
 let issueSeq = 0;
 const issue = (i: Omit<Issue, 'id'>): Issue => ({ id: `iss${++issueSeq}`, ...i });
@@ -103,7 +104,7 @@ export function planDesign(strokes: DesignStroke[], profilesList: StripProfile[]
   const pgs: PG[] = works.map((w, i) => makePG(i, w, profOf(w.profileId)));
   if (set.freeEndMode === 'lit') {
     for (const g of pgs) {
-      const half = g.prof.ledPitch / 2;
+      const half = ledPitchOf(g.prof) / 2;
       if (g.startFree) g.lo = -(g.prof.capFeed + half);
       if (g.endFree) g.hi = g.L0 + g.prof.capBlind + half;
     }
@@ -131,35 +132,30 @@ export function planDesign(strokes: DesignStroke[], profilesList: StripProfile[]
     }
   }
 
-  // 8. whole cut units
+  // 8. cut units. The feed end is always cut on a mark (its pads take the wires). If the strip
+  //    allows it, the blind end may be cut anywhere: the cut segment stays dark, but the strip body
+  //    keeps the drawn shape (no extra gaps at corners, crossings and seams).
   const residuals = new Map<number, number>();
   const units = new Map<number, number>();
+  const RATIOS = [0.5, 0.4, 0.6, 0.3, 0.7, 0.2, 0.8, 0.1, 0.9, 0, 1];
+  const tooShort = (g: PG) =>
+    issues.push(
+      issue({
+        severity: 'error',
+        code: 'too-short',
+        message: `Parça bir kesim biriminden (${g.prof.cutUnit} mm) kısa kalıyor; yer yok.`,
+        at: pgPoint(g, (g.lo + g.hi) / 2),
+      }),
+    );
   for (const g of pgs) {
     const { cutUnit: u, capFeed, capBlind } = g.prof;
     const caps = capFeed + capBlind;
-    const L = g.hi - g.lo;
-    if (!g.startFree && !g.endFree) {
-      let N = Math.floor((L - caps) / u + 1e-6);
-      if (N < 1) {
-        N = 1;
-        issues.push(
-          issue({
-            severity: 'error',
-            code: 'too-short',
-            message: `Parça bir kesim biriminden (${u} mm) kısa kalıyor; yer yok.`,
-            at: pgPoint(g, (g.lo + g.hi) / 2),
-          }),
-        );
-      }
-      const r = L - (N * u + caps);
-      g.lo += r / 2;
-      g.hi -= r / 2;
-      units.set(g.idx, N);
-      residuals.set(g.idx, -r);
-      continue;
-    }
-    const reff = reffOf(g);
+    const lo0 = g.lo;
+    const hi0 = g.hi;
+    let reff: Float64Array | null = null;
+    /** cut marks that land inside tight bends (solder pads are stiff) */
     const markPenalty = (lo: number, N: number) => {
+      reff ??= reffOf(g);
       let c = 0;
       for (let k = 1; k < N; k++) {
         const s = lo + capFeed + k * u;
@@ -169,49 +165,108 @@ export function planDesign(strokes: DesignStroke[], profilesList: StripProfile[]
       }
       return c;
     };
-    const N0 = (L - caps) / u;
-    const cands = [...new Set([Math.round(N0), Math.floor(N0), Math.ceil(N0)].map((n) => Math.max(1, n)))];
-    const lo0 = g.lo;
-    const hi0 = g.hi;
-    let accepted = false;
-    for (const N of cands) {
-      const delta = N * u + caps - L; // + grow, - shrink
-      let ratios: number[];
-      if (g.startFree && g.endFree) ratios = [0.5, 0.4, 0.6, 0.3, 0.7, 0.2, 0.8, 0.1, 0.9, 0, 1];
-      else ratios = [g.startFree ? 1 : 0];
-      let bestRatio = ratios[0];
-      if (ratios.length > 1) {
-        let bestPen = Infinity;
-        for (const r of ratios) {
-          const pen = markPenalty(lo0 - delta * r, N);
-          if (pen < bestPen) {
-            bestPen = pen;
-            bestRatio = r;
-          }
+    const bestRatio = (ratios: number[], loFor: (r: number) => number, N: number) => {
+      let best = ratios[0];
+      let bestPen = Infinity;
+      for (const r of ratios) {
+        const pen = ratios.length > 1 ? markPenalty(loFor(r), N) : 0;
+        if (pen < bestPen) {
+          bestPen = pen;
+          best = r;
         }
       }
-      g.lo = lo0 - delta * bestRatio;
-      g.hi = hi0 + delta * (1 - bestRatio);
-      if (delta > 0) {
-        const bad =
-          (g.lo < lo0 && cl.conflictAtEnd(g.idx, true)) || (g.hi > hi0 && cl.conflictAtEnd(g.idx, false));
-        if (bad && N !== cands[cands.length - 1]) {
+      return best;
+    };
+    const conflicts = () =>
+      (g.lo < lo0 - 1e-9 && cl.conflictAtEnd(g.idx, true)) || (g.hi > hi0 + 1e-9 && cl.conflictAtEnd(g.idx, false));
+    let N = 1;
+
+    if (g.prof.blindCutAnywhere) {
+      const S0 = hi0 - lo0 - caps; // strip between the feed cut and the blind end
+      if (!g.endFree) {
+        // blind end held by a neighbour: light the whole units that fit, the rest stays dark.
+        // If more than half a unit would be dark and the feed end is free, grow it instead.
+        N = Math.floor(S0 / u + 1e-6);
+        const tail = S0 - N * u;
+        if (g.startFree && (N < 1 || tail > u / 2)) {
+          g.lo = lo0 - (u - tail);
+          if (conflicts()) g.lo = lo0;
+          else N += 1;
+        }
+        if (N < 1) {
+          // nothing fits: show it as one unit centred on the spot (the overlap is reported)
+          N = 1;
+          tooShort(g);
+          const r = g.hi - g.lo - (u + caps);
+          g.lo += r / 2;
+          g.hi -= r / 2;
+        }
+      } else {
+        // blind end free: the whole number of units closest to the drawing; a free feed end
+        // shares the error. Too long -> grow the ends, too short -> keep the body, end stays dark.
+        const N0 = S0 / u;
+        const cands = [...new Set([Math.round(N0), Math.floor(N0), Math.ceil(N0)].map((n) => Math.max(1, n)))];
+        let done = false;
+        for (const Nc of cands) {
+          const m = Nc * u - S0;
+          const r = bestRatio(g.startFree ? RATIOS : [0], (x) => lo0 - m * x, Nc);
+          g.lo = lo0 - m * r;
+          g.hi = m > 0 ? hi0 + m * (1 - r) : hi0;
+          if (m > 0 && conflicts() && Nc !== cands[cands.length - 1]) {
+            g.lo = lo0;
+            g.hi = hi0;
+            continue;
+          }
+          N = Nc;
+          done = true;
+          break;
+        }
+        if (!done) {
+          g.lo = lo0;
+          g.hi = hi0;
+          N = Math.max(1, Math.floor(N0));
+        }
+      }
+    } else if (!g.startFree && !g.endFree) {
+      // whole units only, both ends held: shrink evenly (gaps can only grow)
+      const L = hi0 - lo0;
+      N = Math.floor((L - caps) / u + 1e-6);
+      if (N < 1) {
+        N = 1;
+        tooShort(g);
+      }
+      const r = L - (N * u + caps);
+      g.lo += r / 2;
+      g.hi -= r / 2;
+    } else {
+      // whole units only: free ends move (<= half a unit) to the nearest whole number of units
+      const L = hi0 - lo0;
+      const N0 = (L - caps) / u;
+      const cands = [...new Set([Math.round(N0), Math.floor(N0), Math.ceil(N0)].map((n) => Math.max(1, n)))];
+      let done = false;
+      for (const Nc of cands) {
+        const delta = Nc * u + caps - L; // + grow, - shrink
+        const ratios = g.startFree && g.endFree ? RATIOS : [g.startFree ? 1 : 0];
+        const r = bestRatio(ratios, (x) => lo0 - delta * x, Nc);
+        g.lo = lo0 - delta * r;
+        g.hi = hi0 + delta * (1 - r);
+        if (delta > 0 && conflicts() && Nc !== cands[cands.length - 1]) {
           g.lo = lo0;
           g.hi = hi0;
           continue;
         }
+        N = Nc;
+        done = true;
+        break;
       }
-      units.set(g.idx, N);
-      residuals.set(g.idx, delta);
-      accepted = true;
-      break;
+      if (!done) {
+        g.lo = lo0;
+        g.hi = hi0;
+        N = Math.max(1, Math.round(N0));
+      }
     }
-    if (!accepted) {
-      g.lo = lo0;
-      g.hi = hi0;
-      units.set(g.idx, Math.max(1, Math.round(N0)));
-      residuals.set(g.idx, 0);
-    }
+    units.set(g.idx, N);
+    residuals.set(g.idx, lo0 - g.lo + (g.hi - hi0));
     if (g.lo < lo0) cl.addRange(g, g.lo, lo0);
     if (g.hi > hi0) cl.addRange(g, hi0, g.hi);
   }
@@ -231,6 +286,8 @@ export function planDesign(strokes: DesignStroke[], profilesList: StripProfile[]
     const p = g.prof;
     const N = units.get(g.idx) ?? 1;
     const length = g.hi - g.lo;
+    const pitch = ledPitchOf(p);
+    const stripLength = Math.max(N * p.cutUnit, length - p.capFeed - p.capBlind);
     const id = `p${i + 1}`;
     let hole: Vec;
     if (p.cableExit === 'bottom') hole = pgPoint(g, g.lo + p.capFeed / 2);
@@ -245,11 +302,13 @@ export function planDesign(strokes: DesignStroke[], profilesList: StripProfile[]
       pts,
       length,
       units: N,
-      stripLength: N * p.cutUnit,
+      stripLength,
+      consumedUnits: Math.max(N, Math.ceil(stripLength / p.cutUnit - 1e-6)),
+      darkTail: Math.max(0, stripLength - N * p.cutUnit),
       capStart: p.capFeed,
       capEnd: p.capBlind,
-      litStart: p.capFeed + p.ledPitch / 2,
-      litEnd: length - p.capBlind - p.ledPitch / 2,
+      litStart: p.capFeed + pitch / 2,
+      litEnd: p.capFeed + N * p.cutUnit - pitch / 2,
       startKind: g.startKind,
       endKind: g.endKind,
       loop: g.work.loop,
@@ -401,7 +460,7 @@ export function planDesign(strokes: DesignStroke[], profilesList: StripProfile[]
     const ps = pieces.filter((pc) => pc.profileId === p.id);
     return {
       profileId: p.id,
-      usedMm: ps.reduce((a, pc) => a + pc.stripLength, 0),
+      usedMm: ps.reduce((a, pc) => a + pc.consumedUnits * p.cutUnit, 0),
       availableMm: p.stockMm,
       pieces: ps.length,
     };

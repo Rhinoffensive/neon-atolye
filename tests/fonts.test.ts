@@ -44,7 +44,7 @@ describe('regressions on real signs', () => {
     expect(r.size.minScale).toBeGreaterThan(1);
     expect(r.issues.some((i) => i.code === 'tight-bend' && i.severity === 'error')).toBe(true);
   });
-  it('every piece is a whole number of cut units and matches its length', () => {
+  it('every piece lights whole units and its length matches the roll use', () => {
     for (const [t, f] of [
       ['Hoş Geldin', 'EMSAllure'],
       ['eczane', 'EMSReadability'],
@@ -53,10 +53,12 @@ describe('regressions on real signs', () => {
       const r = plan(t, f, 150);
       for (const p of r.pieces) {
         expect(Number.isInteger(p.units) && p.units >= 1).toBe(true);
-        expect(p.length).toBeCloseTo(p.units * prof.cutUnit + prof.capFeed + prof.capBlind, 1);
+        expect(p.length).toBeCloseTo(p.stripLength + prof.capFeed + prof.capBlind, 6);
+        expect(p.darkTail).toBeGreaterThanOrEqual(0);
+        expect(p.darkTail).toBeLessThan(prof.cutUnit);
       }
       const used = r.stock.reduce((a, s) => a + s.usedMm, 0);
-      expect(used).toBeCloseTo(r.pieces.reduce((a, p) => a + p.stripLength, 0), 6);
+      expect(used).toBeCloseTo(r.pieces.reduce((a, p) => a + p.consumedUnits * prof.cutUnit, 0), 6);
     }
   });
 });
