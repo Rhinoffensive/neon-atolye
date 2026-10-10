@@ -1,5 +1,7 @@
 # Neon Atölye
 
+**Canlı:** https://rhinoffensive.github.io/neon-atolye/ — telefonda bu linki Chrome'da açıp **📱 AR**'ye basman yeterli (HTTPS olduğu için kablo/adb gerekmez).
+
 LED neon flex tabelaları tasarlamak, **yapım planını** çıkarmak ve sonucu önizlemek için web aracı. Önizleme masaüstünde yapılır, AR ile duvarda görmek Android telefonda çalışır.
 
 - **Tasarım:** Türkçe karakterleri tam olan tek-çizgi fontlarla yazı yazılır (EMS Allure / Readability / Tech / Felix / Nixish, Hershey Script / Sans). Ayrıca serbest çizim ve SVG içe aktarma var.
@@ -46,7 +48,7 @@ npm test
 
 ## Telefonda AR
 
-WebXR yalnızca güvenli bağlamda (HTTPS ya da `localhost`) çalışır. En kolay yol USB kablosudur:
+Yayındaki sürümde doğrudan çalışır. Geliştirirken yerel sunucuyu telefonda denemek için (WebXR yalnızca HTTPS ya da `localhost` üzerinde çalışır) USB kablosu kullan:
 
 1. Telefonda Geliştirici seçenekleri → USB hata ayıklama'yı aç ve telefonu USB ile bağla.
 2. Telefonun, bilgisayardaki sunucuya `localhost` üzerinden ulaşmasını sağla:
@@ -70,6 +72,10 @@ Hata ayıklama için bilgisayarda Chrome'da `chrome://inspect` aç. Düz beyaz d
 | Kablo çıkışı | Kapağın kablosu alttan mı uçtan mı çıkıyor (delik yeri buna göre) |
 | Difüzyon q | Şerit yanarken LED'ler nokta nokta görünüyorsa 0,35–0,45, düz çizgiyse 0,6 |
 | Stok | Elindeki metre |
+
+## Yayın
+
+`main` dalına her gönderimde GitHub Actions testleri çalıştırır, `BASE_PATH=/neon-atolye/` ile derler ve GitHub Pages'e yükler (`.github/workflows/deploy.yml`).
 
 ## Klasörler
 
