@@ -84,6 +84,9 @@ function additive(mat: THREE.ShaderMaterial): THREE.ShaderMaterial {
   return mat;
 }
 
+export type ArMode = 'follow' | 'wall';
+const ONE = new THREE.Vector3(1, 1, 1);
+
 export interface ArParams {
   on: number;
   brightness: number;
@@ -109,13 +112,30 @@ export class ArScene {
   private session: XRSession | null = null;
   private refSpace: XRReferenceSpace | null = null;
   private hitSource: XRHitTestSource | null = null;
-  private lastHit: XRHitTestResult | null = null;
+  private lastHitAt = 0;
+  private searching = false;
+  /** wall mode: a tap asks to place; done inside the next XR frame (hit results and anchors
+   *  are only valid in the frame they belong to) */
+  private placeRequested = false;
   private anchor: XRAnchor | null = null;
+  /** sign pose relative to its anchor, fixed at placement time */
+  private anchorOffset: THREE.Matrix4 | null = null;
   private lockedMatrix: THREE.Matrix4 | null = null;
+  private smoothPos = new THREE.Vector3();
+  private smoothQuat = new THREE.Quaternion();
+  private hasSmooth = false;
+  /** 'follow': the sign floats in front of the camera; 'wall': placed on a detected surface */
+  mode: ArMode = 'follow';
+  /** follow mode: frozen where it was when the user tapped */
+  pinned = false;
+  /** follow mode: distance in front of the camera (m) */
+  distance = 1.5;
   placed = false;
+  canHitTest = false;
   signHeightM = 0.2;
   onStatus: (s: string) => void = () => {};
   onEnd: () => void = () => {};
+  onState: () => void = () => {};
   params: ArParams = { on: 1, brightness: 1, wallGain: 0.18, glow: 1, exposure: 1.4, room: 0.25 };
 
   constructor(canvas: HTMLCanvasElement) {
@@ -215,51 +235,113 @@ export class ArScene {
   async start(overlay: HTMLElement): Promise<void> {
     const xr = navigator.xr;
     if (!xr) throw new Error('Bu tarayıcıda WebXR yok.');
+    // hit-test is only needed for wall placement; the camera-follow mode works without it
     const session = await xr.requestSession('immersive-ar', {
-      requiredFeatures: ['hit-test'],
-      optionalFeatures: ['anchors', 'dom-overlay', 'local-floor'],
+      optionalFeatures: ['hit-test', 'anchors', 'dom-overlay'],
       domOverlay: { root: overlay },
     } as XRSessionInit);
     this.session = session;
     this.renderer.xr.setReferenceSpaceType('local');
     await this.renderer.xr.setSession(session);
     this.refSpace = this.renderer.xr.getReferenceSpace();
-    const viewer = await session.requestReferenceSpace('viewer');
-    this.hitSource = (await session.requestHitTestSource?.({ space: viewer })) ?? null;
-    session.addEventListener('select', () => this.place());
+    try {
+      const viewer = await session.requestReferenceSpace('viewer');
+      this.hitSource = (await session.requestHitTestSource?.({ space: viewer })) ?? null;
+    } catch {
+      this.hitSource = null;
+    }
+    this.canHitTest = !!this.hitSource;
+    session.addEventListener('select', () => this.tap());
     session.addEventListener('end', () => this.cleanup());
-    this.onStatus('Telefonu duvara doğru tut, halka duvarın üstüne otursun, sonra dokun.');
+    this.setMode('follow');
     this.renderer.setAnimationLoop((_t, frame) => this.frame(frame));
   }
 
-  /** Tap: lock the sign at the current hit (anchor if supported). */
-  place(): void {
-    if (this.placed) return;
-    const hit = this.lastHit;
-    if (!hit || !this.refSpace) return;
-    const pose = hit.getPose(this.refSpace);
-    if (!pose) return;
-    this.lockedMatrix = this.signMatrix(new THREE.Matrix4().fromArray(pose.transform.matrix));
-    this.placed = true;
-    this.reticle.visible = false;
-    const create = (hit as XRHitTestResult & { createAnchor?: () => Promise<XRAnchor> }).createAnchor;
-    if (create) {
-      create
-        .call(hit)
-        .then((a) => {
-          this.anchor = a;
-        })
-        .catch(() => {});
+  setMode(mode: ArMode): void {
+    if (mode === 'wall' && !this.canHitTest) {
+      this.onStatus('Bu cihazda yüzey bulma (hit-test) yok; tabela ekranda kalacak.');
+      mode = 'follow';
     }
-    this.onStatus('Yerleştirildi. Yeniden yerleştirmek için butonu kullan.');
+    this.mode = mode;
+    this.pinned = false;
+    this.unplace(false);
+    this.hasSmooth = false;
+    this.placeRequested = false;
+    this.lastHitAt = performance.now();
+    this.searching = false;
+    this.onStatus(
+      mode === 'follow'
+        ? `Tabela ${this.distance.toLocaleString('tr-TR')} m önünde, gerçek boyutta. Ekrana dokun: bu noktada sabitlensin.`
+        : 'Telefonu duvara doğru tut, halka duvarın üstüne otursun, sonra dokun.',
+    );
+    this.onState();
   }
 
-  unplace(): void {
+  setDistance(m: number): void {
+    this.distance = m;
+    if (this.mode === 'follow' && !this.pinned) this.onStatus(`Tabela ${m.toLocaleString('tr-TR')} m önünde, gerçek boyutta. Ekrana dokun: bu noktada sabitlensin.`);
+  }
+
+  private tap(): void {
+    if (this.mode === 'follow') this.togglePin();
+    else if (!this.placed) this.placeRequested = true;
+  }
+
+  /** Follow mode: freeze the sign where it is now / let it follow the camera again. */
+  togglePin(): void {
+    this.pinned = !this.pinned;
+    this.onStatus(
+      this.pinned
+        ? 'Bu noktada sabitlendi. Tekrar dokun: yine kamerayla gelsin.'
+        : `Tabela ${this.distance.toLocaleString('tr-TR')} m önünde. Ekrana dokun: sabitlensin.`,
+    );
+    this.onState();
+  }
+
+  /**
+   * Wall mode, inside an XR frame: lock the sign where the preview is. The anchor is made from
+   * this frame's hit (or from the preview pose if the wall was lost for a moment).
+   */
+  private placeNow(frame: XRFrame, hit: XRHitTestResult | null): void {
+    if (!this.refSpace || !this.hasSmooth) return;
+    const signM = new THREE.Matrix4().compose(this.smoothPos, this.smoothQuat, ONE);
+    let anchorPose: THREE.Matrix4 = signM;
+    let anchorPromise: Promise<XRAnchor> | undefined;
+    const hitPose = hit?.getPose(this.refSpace);
+    const hitWithAnchor = hit as (XRHitTestResult & { createAnchor?: () => Promise<XRAnchor> }) | null;
+    if (hitPose && hitWithAnchor?.createAnchor) {
+      anchorPose = new THREE.Matrix4().fromArray(hitPose.transform.matrix);
+      anchorPromise = hitWithAnchor.createAnchor();
+    } else if (frame.createAnchor) {
+      const p = this.smoothPos;
+      const q = this.smoothQuat;
+      anchorPromise = frame.createAnchor(new XRRigidTransform({ x: p.x, y: p.y, z: p.z }, { x: q.x, y: q.y, z: q.z, w: q.w }), this.refSpace);
+    }
+    this.lockedMatrix = signM;
+    this.anchorOffset = anchorPose.clone().invert().multiply(signM);
+    this.placed = true;
+    this.placeRequested = false;
+    this.reticle.visible = false;
+    anchorPromise
+      ?.then((a) => {
+        if (this.placed) this.anchor = a;
+        else a.delete?.();
+      })
+      .catch(() => {});
+    this.onStatus('Duvara yerleştirildi. Yeniden yerleştirmek için butonu kullan.');
+    this.onState();
+  }
+
+  unplace(announce = true): void {
     this.anchor?.delete?.();
     this.anchor = null;
+    this.anchorOffset = null;
     this.lockedMatrix = null;
     this.placed = false;
-    this.onStatus('Duvara doğru tut ve dokun.');
+    this.placeRequested = false;
+    this.hasSmooth = false;
+    if (announce) this.onStatus('Duvara doğru tut ve dokun.');
+    this.onState();
   }
 
   /** Sign frame from a hit pose: Z = surface normal (towards the viewer), Y = up. */
@@ -287,27 +369,75 @@ export class ArScene {
     return new THREE.Matrix4().makeBasis(X, Y, Z).setPosition(pos);
   }
 
+  /** Follow mode: `distance` m straight ahead of the camera, facing it, kept upright. */
+  private followMatrix(viewer: THREE.Matrix4): THREE.Matrix4 {
+    const pos = new THREE.Vector3().setFromMatrixPosition(viewer);
+    const fwd = new THREE.Vector3(0, 0, -1).transformDirection(viewer);
+    const Z = fwd.clone().negate();
+    const Y = new THREE.Vector3(0, 1, 0).addScaledVector(Z, -Z.y);
+    if (Y.lengthSq() < 1e-6) Y.set(0, 0, -1);
+    Y.normalize();
+    const X = new THREE.Vector3().crossVectors(Y, Z).normalize();
+    Y.crossVectors(Z, X);
+    return new THREE.Matrix4().makeBasis(X, Y, Z).setPosition(pos.addScaledVector(fwd, this.distance));
+  }
+
   private frame(frame: XRFrame | undefined): void {
     if (!frame || !this.refSpace) return;
-    if (!this.placed && this.hitSource) {
+    if (this.mode === 'follow') {
+      this.reticle.visible = false;
+      if (!this.pinned) {
+        const vp = frame.getViewerPose(this.refSpace);
+        if (vp) {
+          this.signRoot.matrix.copy(this.followMatrix(new THREE.Matrix4().fromArray(vp.transform.matrix)));
+          this.signRoot.visible = true;
+        }
+      }
+    } else if (!this.placed && this.hitSource) {
       const hits = frame.getHitTestResults(this.hitSource);
       if (hits.length) {
-        this.lastHit = hits[0];
+        this.lastHitAt = performance.now();
+        if (this.searching) {
+          this.searching = false;
+          this.onStatus('Halka duvarın üstünde: yerleştirmek için ekrana dokun.');
+        }
         const pose = hits[0].getPose(this.refSpace);
         if (pose) {
           const m = new THREE.Matrix4().fromArray(pose.transform.matrix);
           this.reticle.matrix.copy(m);
           this.reticle.visible = true;
-          this.signRoot.matrix.copy(this.signMatrix(m));
+          // low-pass the preview so hit-test noise does not make it jump around
+          const tp = new THREE.Vector3();
+          const tq = new THREE.Quaternion();
+          this.signMatrix(m).decompose(tp, tq, new THREE.Vector3());
+          if (!this.hasSmooth || this.smoothPos.distanceTo(tp) > 0.6) {
+            this.smoothPos.copy(tp);
+            this.smoothQuat.copy(tq);
+            this.hasSmooth = true;
+          } else {
+            this.smoothPos.lerp(tp, 0.2);
+            this.smoothQuat.slerp(tq, 0.2);
+          }
+          this.signRoot.matrix.compose(this.smoothPos, this.smoothQuat, ONE);
           this.signRoot.visible = true;
         }
+        if (this.placeRequested) this.placeNow(frame, hits[0]);
       } else {
         this.reticle.visible = false;
+        // wall lost for a moment: a tap still pins the sign where the preview is
+        if (this.placeRequested) {
+          if (this.hasSmooth) this.placeNow(frame, null);
+          else this.placeRequested = false;
+        }
+        if (!this.searching && performance.now() - this.lastHitAt > 1500) {
+          this.searching = true;
+          this.onStatus('Duvar aranıyor… telefonu yavaşça sağa sola gezdir. Bulamazsa 🎯 Ekranda modunu kullan.');
+        }
       }
     } else if (this.placed) {
-      if (this.anchor && frame.trackedAnchors?.has(this.anchor)) {
+      if (this.anchor && this.anchorOffset && frame.trackedAnchors?.has(this.anchor)) {
         const pose = frame.getPose(this.anchor.anchorSpace, this.refSpace);
-        if (pose) this.lockedMatrix = this.signMatrix(new THREE.Matrix4().fromArray(pose.transform.matrix));
+        if (pose) this.lockedMatrix = new THREE.Matrix4().fromArray(pose.transform.matrix).multiply(this.anchorOffset);
       }
       if (this.lockedMatrix) {
         this.signRoot.matrix.copy(this.lockedMatrix);
@@ -327,7 +457,9 @@ export class ArScene {
     this.hitSource = null;
     this.session = null;
     this.placed = false;
+    this.pinned = false;
     this.anchor = null;
+    this.anchorOffset = null;
     this.onEnd();
   }
 

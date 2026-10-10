@@ -872,3 +872,22 @@ button.accent {
   gap: 8px;
   font-size: 12px;
 }
+
+.ar-bottom .seg {
+  display: inline-flex;
+  gap: 0;
+}
+.ar-bottom .seg button {
+  border-radius: 0;
+}
+.ar-bottom .seg button:first-child {
+  border-radius: 10px 0 0 10px;
+}
+.ar-bottom .seg button:last-child {
+  border-radius: 0 10px 10px 0;
+}
+
+.ar-bottom .row .grow {
+  flex: 1;
+  min-width: 0;
+}

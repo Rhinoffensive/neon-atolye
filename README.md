@@ -23,10 +23,10 @@ LED neon flex tabelaları tasarlamak, **yapım planını** çıkarmak ve sonucu 
   - Duvara vuran ışık duvar rengiyle çarpılır ve tabelanın duvara uzaklığına göre yayılır.
   - "Kamera" modunda çekirdek beyaza yanar; "Göz" modunda renk doygun kalır.
   - Gece/gündüz ayarı, hazır duvarlar ve fotoğraf arka planı, yanma animasyonu, PNG kaydetme var.
-- **AR (Android Chrome + ARCore):**
-  - Telefonu duvara tutup tabelayı gerçek boyutta görürsün.
-  - Dokununca tabela duvara sabitlenir.
-  - Boyut, parlaklık ve pozlama AR'nin içinden değiştirilebilir.
+- **AR (Android Chrome + ARCore):** iki mod var, AR içinden geçilir.
+  - **🎯 Ekranda** (varsayılan): tabela kameranın önünde, seçtiğin mesafede (0,4–4 m) gerçek boyutta durur ve kamerayla birlikte gelir; yüzey bulmaya gerek yok, hemen görünür. Ekrana dokununca o noktada sabitlenir, tekrar dokununca yine kamerayı izler.
+  - **📍 Duvarda:** halka duvarın üstüne oturunca dokun, tabela duvara sabitlenir (önizleme titremesin diye yumuşatılır).
+  - Boyut, parlaklık, pozlama ve hale AR'nin içinden değiştirilebilir.
 - **Yapım modu:** Hazırlık adımları ve her parça için "kes → bük → yerleştir" kartları.
 
 ## Çalıştırma
@@ -59,7 +59,7 @@ Yayındaki sürümde doğrudan çalışır. Geliştirirken yerel sunucuyu telefo
    ```
 
 3. Telefonda Chrome'da `http://localhost:5173` adresini aç ve **📱 AR** düğmesine bas.
-4. Kamera izni ver. Telefonu duvara tut; halka duvarın üstüne oturunca dokun.
+4. Kamera izni ver. Tabela önce 🎯 Ekranda modunda 1,5 m önünde görünür; duvara sabitlemek için 📍 Duvarda'ya geç.
 
 Hata ayıklama için bilgisayarda Chrome'da `chrome://inspect` aç. Düz beyaz duvarlarda ARCore düzlem bulmakta zorlanabilir; dokulu bir yüzey ya da duvara yapıştırılmış bir kâğıt yardımcı olur.
 
